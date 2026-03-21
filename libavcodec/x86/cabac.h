@@ -175,7 +175,7 @@
 
 #endif /* BROKEN_RELOCATIONS */
 
-#if HAVE_7REGS && !BROKEN_COMPILER
+#if HAVE_7REGS && false
 #define get_cabac_inline get_cabac_inline_x86
 static
 #if ARCH_X86_32
@@ -216,7 +216,7 @@ int get_cabac_inline_x86(CABACContext *c, uint8_t *const state)
 }
 #endif /* HAVE_7REGS && !BROKEN_COMPILER */
 
-#if !BROKEN_COMPILER
+#if false
 #define get_cabac_bypass_sign get_cabac_bypass_sign_x86
 static av_always_inline int get_cabac_bypass_sign_x86(CABACContext *c, int val)
 {

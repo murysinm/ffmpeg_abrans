@@ -44,6 +44,10 @@ typedef struct CABACContext{
     const uint8_t *bytestream_start;
     const uint8_t *bytestream;
     const uint8_t *bytestream_end;
+    
+    uint32_t        abrans_rans;
+    const uint8_t  *abrans_ptr;
+    uint16_t        abrans_vsw[200];
 }CABACContext;
 
 int ff_init_cabac_decoder(CABACContext *c, const uint8_t *buf, int buf_size);

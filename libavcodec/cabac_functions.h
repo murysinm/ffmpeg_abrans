@@ -29,11 +29,33 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "libavutil/attributes.h"
 #include "libavutil/intmath.h"
 #include "cabac.h"
 #include "config.h"
+
+#define ABRANS_VSW_LEN      6
+#define ABRANS_VSW_ONE      (1 << (ABRANS_VSW_LEN * 2))
+#define ABRANS_VSW_HALF     (1 << (ABRANS_VSW_LEN * 2 - 1))
+#define ABRANS_RANS_BYTE_L  (1u << 23)
+#define ABRANS_PROB_BITS    14
+#define ABRANS_PROB_SCALE   (1 << ABRANS_PROB_BITS)
+#define ABRANS_PROB_SCALE_M1 ((1 << ABRANS_PROB_BITS) - 1)
+#define ABRANS_WSHIFT       (ABRANS_PROB_BITS - ABRANS_VSW_LEN * 2)
+
+static av_always_inline uint16_t abrans_vsw_from_cabac(uint8_t cs)
+{
+    uint32_t mps = cs & 1;
+    uint32_t k   = cs >> 1;
+    uint32_t init_state = mps ? (k + 64) : (63 - k);
+    uint32_t p1  = (init_state * ABRANS_PROB_SCALE) / 127;
+    uint32_t vsw = p1 >> ABRANS_WSHIFT;
+    if (vsw == 0) vsw = 1;
+    if (vsw >= (uint32_t)ABRANS_VSW_ONE) vsw = ABRANS_VSW_ONE - 1;
+    return (uint16_t)vsw;
+}
 
 #ifndef UNCHECKED_BITSTREAM_READER
 #define UNCHECKED_BITSTREAM_READER !CONFIG_SAFE_BITSTREAM_READER
@@ -113,70 +135,58 @@ static void refill2(CABACContext *c){
 #endif
 
 #ifndef get_cabac_inline
-static av_always_inline int get_cabac_inline(CABACContext *c, uint8_t * const state){
-    int s = *state;
-    int RangeLPS= ff_h264_lps_range[2*(c->range&0xC0) + s];
-    int bit, lps_mask;
+static av_always_inline int get_cabac_inline(CABACContext *c, uint8_t * const state, uint8_t * const start)
+{
+    int ffctx = start ? (int)(state - start) : -1;
+    int ctx = (ffctx >= 0 && ffctx < 199) ? ffctx : 0;
+    uint32_t p1 = (uint32_t)c->abrans_vsw[ctx] << ABRANS_WSHIFT;
+    if (p1 == 0) p1 = 1;
+    if (p1 >= (uint32_t)ABRANS_PROB_SCALE) p1 = ABRANS_PROB_SCALE - 1;
+    uint32_t p0 = ABRANS_PROB_SCALE - p1;
 
-    c->range -= RangeLPS;
-    lps_mask= ((c->range<<(CABAC_BITS+1)) - c->low)>>31;
-
-    c->low -= (c->range<<(CABAC_BITS+1)) & lps_mask;
-    c->range += (RangeLPS - c->range) & lps_mask;
-
-    s^=lps_mask;
-    *state= (ff_h264_mlps_state+128)[s];
-    bit= s&1;
-
-    lps_mask= ff_h264_norm_shift[c->range];
-    c->range<<= lps_mask;
-    c->low  <<= lps_mask;
-    if(!(c->low & CABAC_MASK))
-        refill2(c);
+    uint32_t cumcurr = c->abrans_rans & ABRANS_PROB_SCALE_M1;
+    int bit;
+    if (cumcurr < p0) {
+        bit = 0;
+        c->abrans_rans = p0 * (c->abrans_rans >> ABRANS_PROB_BITS) + cumcurr;
+        c->abrans_vsw[ctx] -= c->abrans_vsw[ctx] >> ABRANS_VSW_LEN;
+    } else {
+        bit = 1;
+        c->abrans_rans = p1 * (c->abrans_rans >> ABRANS_PROB_BITS) + cumcurr - p0;
+        c->abrans_vsw[ctx] += (uint16_t)((ABRANS_VSW_ONE - c->abrans_vsw[ctx]) >> ABRANS_VSW_LEN);
+    }
+    if (c->abrans_rans < ABRANS_RANS_BYTE_L)
+        c->abrans_rans = (c->abrans_rans << 8) | *c->abrans_ptr++;
     return bit;
 }
 #endif
 
-av_unused av_noinline static int get_cabac_noinline(CABACContext *c, uint8_t * const state){
-    return get_cabac_inline(c,state);
+av_noinline static int get_cabac_noinline(CABACContext *c, uint8_t * const state){
+    return get_cabac_inline(c, state, NULL);
 }
 
-av_unused static int get_cabac(CABACContext *c, uint8_t * const state){
-    return get_cabac_inline(c,state);
+static int get_cabac(CABACContext *c, uint8_t * const state){
+    return get_cabac_inline(c, state, NULL);
 }
 
 #ifndef get_cabac_bypass
-av_unused static int get_cabac_bypass(CABACContext *c){
-    int range;
-    c->low += c->low;
-
-    if(!(c->low & CABAC_MASK))
-        refill(c);
-
-    range= c->range<<(CABAC_BITS+1);
-    if(c->low < range){
-        return 0;
-    }else{
-        c->low -= range;
-        return 1;
-    }
+static av_always_inline int get_cabac_bypass(CABACContext *c)
+{
+    uint32_t rans = c->abrans_rans;
+    int bit = (rans >> (ABRANS_PROB_BITS - 1)) & 1;
+    rans = ((rans >> 1) & ~(uint32_t)(ABRANS_PROB_SCALE / 2 - 1)) |
+           (rans & (uint32_t)(ABRANS_PROB_SCALE / 2 - 1));
+    if (rans < ABRANS_RANS_BYTE_L)
+        rans = (rans << 8) | *c->abrans_ptr++;
+    c->abrans_rans = rans;
+    return bit;
 }
 #endif
 
 #ifndef get_cabac_bypass_sign
-static av_always_inline int get_cabac_bypass_sign(CABACContext *c, int val){
-    int range, mask;
-    c->low += c->low;
-
-    if(!(c->low & CABAC_MASK))
-        refill(c);
-
-    range= c->range<<(CABAC_BITS+1);
-    c->low -= range;
-    mask= c->low >> 31;
-    range &= mask;
-    c->low += range;
-    return (val^mask)-mask;
+static av_always_inline int get_cabac_bypass_sign(CABACContext *c, int val)
+{
+    return get_cabac_bypass(c) ? val : -val;
 }
 #endif
 
@@ -184,14 +194,27 @@ static av_always_inline int get_cabac_bypass_sign(CABACContext *c, int val){
  * @return the number of bytes read or 0 if no end
  */
 #ifndef get_cabac_terminate
-av_unused static int get_cabac_terminate(CABACContext *c){
-    c->range -= 2;
-    if(c->low < c->range<<(CABAC_BITS+1)){
-        renorm_cabac_decoder_once(c);
-        return 0;
-    }else{
-        return c->bytestream - c->bytestream_start;
+av_unused static int get_cabac_terminate(CABACContext *c)
+{
+    uint32_t p1 = (uint32_t)c->abrans_vsw[199] << ABRANS_WSHIFT;
+    if (p1 == 0) p1 = 1;
+    if (p1 >= (uint32_t)ABRANS_PROB_SCALE) p1 = ABRANS_PROB_SCALE - 1;
+    uint32_t p0 = ABRANS_PROB_SCALE - p1;
+
+    uint32_t cumcurr = c->abrans_rans & ABRANS_PROB_SCALE_M1;
+    int bit;
+    if (cumcurr < p0) {
+        bit = 0;
+        c->abrans_rans = p0 * (c->abrans_rans >> ABRANS_PROB_BITS) + cumcurr;
+        c->abrans_vsw[199] -= c->abrans_vsw[199] >> ABRANS_VSW_LEN;
+    } else {
+        bit = 1;
+        c->abrans_rans = p1 * (c->abrans_rans >> ABRANS_PROB_BITS) + cumcurr - p0;
+        c->abrans_vsw[199] += (uint16_t)((ABRANS_VSW_ONE - c->abrans_vsw[199]) >> ABRANS_VSW_LEN);
     }
+    if (c->abrans_rans < ABRANS_RANS_BYTE_L)
+        c->abrans_rans = (c->abrans_rans << 8) | *c->abrans_ptr++;
+    return bit;
 }
 #endif
 

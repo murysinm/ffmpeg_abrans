@@ -430,6 +430,7 @@ static int cabac_reinit(HEVCLocalContext *lc)
 static void cabac_init_state(HEVCLocalContext *lc, const HEVCContext *s)
 {
     int init_type = 2 - s->sh.slice_type;
+    int qp = av_clip(s->sh.slice_qp, 0, 51);
     int i;
 
     if (s->sh.cabac_init_flag && s->sh.slice_type != HEVC_SLICE_I)
@@ -439,7 +440,7 @@ static void cabac_init_state(HEVCLocalContext *lc, const HEVCContext *s)
         int init_value = init_values[init_type][i];
         int m = (init_value >> 4) * 5 - 45;
         int n = ((init_value & 15) << 3) - 16;
-        int pre = 2 * (((m * av_clip(s->sh.slice_qp, 0, 51)) >> 4) + n) - 127;
+        int pre = 2 * (((m * qp) >> 4) + n) - 127;
 
         pre ^= pre >> 31;
         if (pre > 124)
@@ -449,6 +450,32 @@ static void cabac_init_state(HEVCLocalContext *lc, const HEVCContext *s)
 
     for (i = 0; i < 4; i++)
         lc->stat_coeff[i] = 0;
+
+    {
+        CABACContext *cc = &lc->cc;
+        uint32_t comp_size = AV_RL32(cc->bytestream + 4);
+        cc->bytestream += 8; /* n_bins (4) + comp_size (4) */
+
+        cc->abrans_rans = AV_RL32(cc->bytestream);
+        cc->abrans_ptr  = cc->bytestream + 4;
+        cc->bytestream += comp_size;
+
+        if (init_type == 0 || cc->abrans_vsw[0] == 0) {
+            for (i = 0; i < HEVC_CONTEXTS; i++) {
+                int init_value = init_values[init_type][i];
+                int m = (init_value >> 4) * 5 - 45;
+                int n = ((init_value & 15) << 3) - 16;
+                int pre = 2 * (((m * qp) >> 4) + n) - 127;
+                int init_state = av_clip((pre + 127) / 2, 1, 126);
+                uint32_t p1 = (uint32_t)(init_state * ABRANS_PROB_SCALE) / 127;
+                uint32_t vsw = p1 >> ABRANS_WSHIFT;
+                if (vsw == 0) vsw = 1;
+                if (vsw >= (uint32_t)ABRANS_VSW_ONE) vsw = ABRANS_VSW_ONE - 1;
+                cc->abrans_vsw[i] = (uint16_t)vsw;
+            }
+            cc->abrans_vsw[199] = ABRANS_VSW_HALF;
+        }
+    }
 }
 
 int ff_hevc_cabac_init(HEVCLocalContext *lc, const HEVCPPS *pps,
@@ -511,7 +538,7 @@ int ff_hevc_cabac_init(HEVCLocalContext *lc, const HEVCPPS *pps,
     return 0;
 }
 
-#define GET_CABAC(ctx)  get_cabac(&lc->cc, &lc->cabac_state[ctx])
+#define GET_CABAC(ctx)  get_cabac_inline(&lc->cc, &lc->cabac_state[ctx], &(lc->cabac_state[0]))
 
 int ff_hevc_sao_merge_flag_decode(HEVCLocalContext *lc)
 {
