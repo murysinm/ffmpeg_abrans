@@ -467,8 +467,11 @@ static void cabac_init_state(HEVCLocalContext *lc, const HEVCContext *s)
                 int n = ((init_value & 15) << 3) - 16;
                 int pre = 2 * (((m * qp) >> 4) + n) - 127;
                 int init_state = av_clip((pre + 127) / 2, 1, 126);
-                uint32_t p1 = (uint32_t)(init_state * ABRANS_PROB_SCALE) / 127;
-                uint32_t vsw = p1 >> ABRANS_WSHIFT;
+                int mps = (init_state >= 64);
+                int k   = mps ? (init_state - 64) : (63 - init_state);
+                double p_lps = 0.5 * pow(0.0375, k / 63.0);
+                double p1_f  = mps ? (1.0 - p_lps) : p_lps;
+                uint32_t vsw = (uint32_t)(p1_f * ABRANS_VSW_ONE + 0.5);
                 if (vsw == 0) vsw = 1;
                 if (vsw >= (uint32_t)ABRANS_VSW_ONE) vsw = ABRANS_VSW_ONE - 1;
                 cc->abrans_vsw[i] = (uint16_t)vsw;

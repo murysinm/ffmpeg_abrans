@@ -30,6 +30,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "libavutil/attributes.h"
 #include "libavutil/intmath.h"
@@ -49,9 +50,9 @@ static av_always_inline uint16_t abrans_vsw_from_cabac(uint8_t cs)
 {
     uint32_t mps = cs & 1;
     uint32_t k   = cs >> 1;
-    uint32_t init_state = mps ? (k + 64) : (63 - k);
-    uint32_t p1  = (init_state * ABRANS_PROB_SCALE) / 127;
-    uint32_t vsw = p1 >> ABRANS_WSHIFT;
+    double p_lps = 0.5 * pow(0.0375, k / 63.0);
+    double p1_f  =   mps ? (1.0 - p_lps) : p_lps;
+    uint32_t vsw = (uint32_t)(p1_f * ABRANS_VSW_ONE + 0.5);
     if (vsw == 0) vsw = 1;
     if (vsw >= (uint32_t)ABRANS_VSW_ONE) vsw = ABRANS_VSW_ONE - 1;
     return (uint16_t)vsw;
