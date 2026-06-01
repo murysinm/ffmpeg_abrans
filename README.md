@@ -1,46 +1,34 @@
-FFmpeg README
-=============
+# ffmpeg_abrans
 
-FFmpeg is a collection of libraries and tools to process multimedia content
-such as audio, video, subtitles and related metadata.
+Форк FFmpeg, в котором модуль энтропийного декодирования CABAC в декодере H.265/HEVC (`libavcodec`) заменён на алгоритм адаптивного двоичного rANS (ABrANS).
 
-## Libraries
+## Сборка
 
-* `libavcodec` provides implementation of a wider range of codecs.
-* `libavformat` implements streaming protocols, container formats and basic I/O access.
-* `libavutil` includes hashers, decompressors and miscellaneous utility functions.
-* `libavfilter` provides means to alter decoded audio and video through a directed graph of connected filters.
-* `libavdevice` provides an abstraction to access capture and playback devices.
-* `libswresample` implements audio mixing and resampling routines.
-* `libswscale` implements color conversion and scaling routines.
+Репозиторий содержит скрипты для сборки в двух конфигурациях. Сборка минимальная: включены только компоненты, необходимые для декодирования HEVC.
 
-## Tools
+### Release
 
-* [ffmpeg](https://ffmpeg.org/ffmpeg.html) is a command line toolbox to
-  manipulate, convert and stream multimedia content.
-* [ffplay](https://ffmpeg.org/ffplay.html) is a minimalistic multimedia player.
-* [ffprobe](https://ffmpeg.org/ffprobe.html) is a simple analysis tool to inspect
-  multimedia content.
-* Additional small tools such as `aviocat`, `ismindex` and `qt-faststart`.
+```bash
+bash build_release.sh
+make -j$(nproc)
+```
 
-## Documentation
+### Debug (без оптимизаций и с отладочными символами)
 
-The offline documentation is available in the **doc/** directory.
+```bash
+bash build_debug.sh
+make -j$(nproc)
+```
 
-The online documentation is available in the main [website](https://ffmpeg.org)
-and in the [wiki](https://trac.ffmpeg.org).
+Скрипты вызывают `bear -- make` для генерации `compile_commands.json`; если `bear` не установлен, можно заменить эту строку на `make`.
 
-### Examples
+Исполняемый файл появится в корне репозитория: `./ffmpeg`.
 
-Coding examples are available in the **doc/examples** directory.
+## Использование
 
-## License
+Декодирование HEVC-битпотока в rawvideo:
 
-FFmpeg codebase is mainly LGPL-licensed with optional components licensed under
-GPL. Please refer to the LICENSE file for detailed information.
+```bash
+./ffmpeg -threads 1 -f hevc -i input.265 -c:v rawvideo -f rawvideo output.yuv
+```
 
-## Contributing
-
-Patches should be submitted to the ffmpeg-devel mailing list using
-`git format-patch` or `git send-email`. Github pull requests should be
-avoided because they are not part of our review process and will be ignored.
